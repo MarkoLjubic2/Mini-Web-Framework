@@ -1,77 +1,88 @@
 package framework.di;
 
-import framework.Scanner;
 import framework.annotations.*;
 
 import java.io.IOException;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class DIEngine {
-    private final DependencyContainer container = new DependencyContainer();
+    private final DependencyContainer container;
     private final Map<Class<?>, Object> singletonInstances = new HashMap<>();
+
+    private static final List<Class<? extends Annotation>> annotations =
+            Arrays.asList(Bean.class, Component.class, Service.class, Controller.class);
 
     public DIEngine() {
         try {
-            List<Class<?>> classes = Scanner.scan();
-            container.setValues(classes);
+            this.container = new DependencyContainer();
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         }
     }
 
-    @SuppressWarnings("unchecked")
-    public <T> T initialize(Class<T> clazz) throws Exception {
-        if (!clazz.isAnnotationPresent(Bean.class) && !clazz.isAnnotationPresent(Component.class) &&
-                !clazz.isAnnotationPresent(Service.class) && !clazz.isAnnotationPresent(Controller.class)) {
+    public Object initialize(Class<?> clazz) {
+        if (annotations.stream().noneMatch(clazz::isAnnotationPresent)) {
             throw new RuntimeException("Class doesn't have required annotation!");
         }
-        if (singletonInstances.containsKey(clazz)) {
-            return (T) singletonInstances.get(clazz);
-        }
-        T instance = clazz.getDeclaredConstructor().newInstance();
 
-        for (Field field : clazz.getDeclaredFields()) {
-            if (field.isAnnotationPresent(Autowired.class)) {
-                Autowired autowired = field.getAnnotation(Autowired.class);
-                Object dependency = resolveDependency(field);
-                field.setAccessible(true);
-                field.set(instance, dependency);
-
-                if (autowired.verbose()) {
-                    System.out.printf("Initialized %s %s in %s on %s with %d%n",
-                            field.getType().getSimpleName(),
-                            field.getName(),
-                            clazz.getSimpleName(),
-                            LocalDateTime.now(),
-                            dependency.hashCode());
-                }
-            }
-        }
-
-        if (clazz.isAnnotationPresent(Service.class) ||
-                clazz.isAnnotationPresent(Controller.class) ||
-                (clazz.isAnnotationPresent(Bean.class) && clazz.getAnnotation(Bean.class).scope().equals(Scope.SINGLETON))) {
-            singletonInstances.put(clazz, instance);
-        }
-
-        return instance;
+        return singletonInstances.containsKey(clazz) ?
+                singletonInstances.get(clazz) : createInstance(clazz);
     }
 
-    private Object resolveDependency(Field field) throws Exception {
+    private Object createInstance(Class<?> clazz) {
+        try {
+            Object instance = clazz.getDeclaredConstructor().newInstance();
+            injectDependencies(instance);
+            if (isSingleton(clazz)) singletonInstances.put(clazz, instance);
+            return instance;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create instance for " + clazz, e);
+        }
+    }
+
+    private void injectDependencies(Object instance) {
+        Arrays.stream(instance.getClass().getDeclaredFields())
+                .filter(field -> field.isAnnotationPresent(Autowired.class))
+                .forEach(field -> {
+                    try {
+                        Object dependency = resolveDependency(field);
+                        field.setAccessible(true);
+                        field.set(instance, dependency);
+                        logInjection(field, instance, dependency);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+    }
+
+    private Object resolveDependency(Field field) {
         Class<?> type = field.getType();
         if (type.isInterface()) {
-            if (!field.isAnnotationPresent(Qualifier.class)) {
-                throw new RuntimeException("Autowired field of type Interface must have a Qualifier annotation");
-            }
-            Qualifier qualifier = field.getAnnotation(Qualifier.class);
-            Class<?> implementationClass = container.getImplementation(qualifier.value());
-            return initialize(implementationClass);
-        } else {
-            return initialize(type);
+            String qualifier = Optional.ofNullable(field.getAnnotation(Qualifier.class))
+                    .map(Qualifier::value)
+                    .orElseThrow(() -> new RuntimeException("Autowired Interface must have a Qualifier"));
+            return initialize(container.getImplementation(qualifier));
         }
+        return initialize(type);
+    }
+
+    private void logInjection(Field field, Object instance, Object dependency) {
+        if (field.getAnnotation(Autowired.class).verbose()) {
+            System.out.printf("Initialized %s %s in %s on %s with %d%n",
+                    field.getType().getSimpleName(),
+                    field.getName(),
+                    instance.getClass().getSimpleName(),
+                    LocalDateTime.now(),
+                    dependency.hashCode());
+        }
+    }
+
+    private boolean isSingleton(Class<?> clazz) {
+        return clazz.isAnnotationPresent(Service.class) ||
+                clazz.isAnnotationPresent(Controller.class) ||
+                (clazz.isAnnotationPresent(Bean.class) && clazz.getAnnotation(Bean.class).scope().equals(Scope.SINGLETON));
     }
 }

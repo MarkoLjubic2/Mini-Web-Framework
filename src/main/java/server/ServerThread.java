@@ -18,9 +18,9 @@ import java.util.Map;
 
 public class ServerThread implements Runnable {
 
-    private Socket socket;
-    private BufferedReader in;
-    private PrintWriter out;
+    private final Socket socket;
+    private final BufferedReader in;
+    private final PrintWriter out;
 
     private final Map<Class<?>, Object> controllerInstances = new HashMap<>();
     private static final Discovery discovery = new Discovery();
@@ -42,19 +42,12 @@ public class ServerThread implements Runnable {
                 return;
             }
 
-            Response response;
-            if (request.getLocation().equals("/")) {
-                // Response example
-                Map<String, Object> responseMap = new HashMap<>();
-                responseMap.put("route_location", request.getLocation());
-                responseMap.put("route_method", request.getMethod().toString());
-                responseMap.put("parameters", request.getParameters());
-                response = new JsonResponse(responseMap);
-            } else {
-                response = processTheRequest(request);
-            }
+            Object response;
+            response = processTheRequest(request);
 
-            out.println(response.render());
+            if (response instanceof Response) {
+                out.println(((Response) response).render());
+            }
 
             in.close();
             out.close();
@@ -67,7 +60,7 @@ public class ServerThread implements Runnable {
         }
     }
 
-    private Response processTheRequest(Request request) throws IOException, InvocationTargetException, IllegalAccessException, InstantiationException {
+    private Object processTheRequest(Request request) throws IOException, InvocationTargetException, IllegalAccessException, InstantiationException {
         String httpMethod = request.getMethod().toString();
         String path = request.getLocation();
         Discovery.Route route = discovery.getRoute(httpMethod, path);
@@ -84,10 +77,24 @@ public class ServerThread implements Runnable {
             }
         });
 
-        java.lang.reflect.Method method = route.getMethod();
-        method.invoke(controllerInstance, request.getParameters());
+        if (controllerInstance == null) {
+            System.out.println("Controller instance is null for class " + route.getClazz().getName());
+            return new JsonResponse(Map.of("error", "Controller instance not found"));
+        }
 
-        return new JsonResponse(Map.of("message", "Request processed"));
+        java.lang.reflect.Method method = route.getMethod();
+
+        Object response;
+
+        if (method.getParameterCount() == 0) {
+            response = method.invoke(controllerInstance);
+        } else if (method.getParameterCount() == 1 && method.getParameterTypes()[0].equals(Request.class)) {
+            response = method.invoke(controllerInstance, request);
+        } else {
+            throw new IllegalArgumentException("Method " + method.getName() + " has an unsupported number of parameters");
+        }
+
+        return response;
     }
 
     private Request generateRequest() throws IOException, RequestNotValidException {
@@ -111,7 +118,7 @@ public class ServerThread implements Runnable {
         } while (!command.trim().isEmpty());
 
         if (method.equals(Method.POST)) {
-            int contentLength = Integer.parseInt(header.get("content-length"));
+            int contentLength = Integer.parseInt(header.get("Content-Length"));
             char[] buff = new char[contentLength];
             in.read(buff, 0, contentLength);
             String parametersString = new String(buff);

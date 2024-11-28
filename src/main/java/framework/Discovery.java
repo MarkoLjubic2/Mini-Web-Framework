@@ -81,7 +81,7 @@ public class Discovery {
 
         @Override
         public String toString() {
-            return "class=" + clazz.getSimpleName() + ", method=" + method.getName();
+            return "controller=" + clazz.getSimpleName() + ", method=" + method.getName();
         }
     }
 }

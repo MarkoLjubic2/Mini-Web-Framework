@@ -51,6 +51,9 @@ public class DIEngine {
                         Object dependency = resolveDependency(field);
                         field.setAccessible(true);
                         field.set(instance, dependency);
+
+                        System.out.println("Injected " + field.getName() + " in " + instance.getClass().getSimpleName());
+
                         logInjection(field, instance, dependency);
                     } catch (IllegalAccessException e) {
                         throw new RuntimeException(e);
